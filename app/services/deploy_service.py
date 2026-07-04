@@ -65,10 +65,10 @@ def run_deploy(
 
     # --- SSH-based targets (ec2, kvm, vps) ---
     elif target_type in ("ec2", "kvm", "vps"):
-        if not server.ip_address or not server.ssh_private_key:
+        if not server.ip_address or (not server.ssh_private_key and not getattr(server, "ssh_password", None)):
             return {
                 "success": False,
-                "error": f"{target_type} target requires ip_address and ssh_private_key",
+                "error": f"{target_type} target requires ip_address and either ssh_private_key or ssh_password",
                 "stages": [],
                 "completed_at": datetime.utcnow().isoformat(),
             }
