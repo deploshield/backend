@@ -4,6 +4,9 @@ from app.services.container_deploy_service import deploy_container
 from app.services.webserver_deploy_service import deploy_webserver
 from app.services.cloudrun_deploy_service import deploy_cloud_run, setup_cloud_run_secrets
 from app.services.nginx_service import setup_nginx_and_ssl
+from app.services.git_service import clone_repository, cleanup_repository
+from app.services.detector_service import detect_project_type
+from app.services.dockerfile_generator import generate_dockerfile
 
 
 def run_deploy(
@@ -18,6 +21,23 @@ def run_deploy(
     target_type = getattr(server, "target_type", "kvm")
     deploy_method = getattr(server, "deploy_method", "container")
     env_variables = getattr(server, "env_variables", None)
+
+    # Auto-generate Dockerfile if not provided and deploy method is container
+    if not generated_dockerfile and deploy_method == "container":
+        import uuid
+        temp_id = str(uuid.uuid4())[:8]
+        clone_result = clone_repository(repo_url, branch, temp_id)
+        if clone_result["success"]:
+            from pathlib import Path
+            repo_path = clone_result["path"]
+            if not (Path(repo_path) / "Dockerfile").exists() and not (Path(repo_path) / "docker-compose.yml").exists():
+                detection = detect_project_type(repo_path)
+                if detection["type"] != "unknown":
+                    generated_dockerfile = generate_dockerfile(detection)
+            try:
+                cleanup_repository(temp_id)
+            except Exception:
+                pass
 
     stages = []
     result = None
