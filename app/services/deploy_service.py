@@ -1,110 +1,138 @@
-import subprocess
-import tempfile
-from pathlib import Path
+from datetime import datetime
+
+from app.services.container_deploy_service import deploy_container
+from app.services.webserver_deploy_service import deploy_webserver
+from app.services.cloudrun_deploy_service import deploy_cloud_run, setup_cloud_run_secrets
+from app.services.nginx_service import setup_nginx_and_ssl
 
 
-def deploy_to_server(
-    ip_address: str,
-    ssh_user: str,
-    ssh_port: int,
-    ssh_private_key: str,
+def run_deploy(
+    server: object,
     repo_url: str,
     branch: str,
     project_name: str,
     generated_dockerfile: str | None = None,
 ) -> dict:
+    """Route deployment to the correct strategy based on server.target_type and server.deploy_method."""
+
+    target_type = getattr(server, "target_type", "kvm")
+    deploy_method = getattr(server, "deploy_method", "container")
+    env_variables = getattr(server, "env_variables", None)
+
     stages = []
+    result = None
 
-    key_file = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
-    key_file.write(ssh_private_key)
-    key_file.close()
-    key_path = key_file.name
-
-    try:
-        # If we have a generated Dockerfile, write it on the server after clone
-        write_dockerfile_cmd = ""
-        if generated_dockerfile:
-            escaped = generated_dockerfile.replace("'", "'\\''")
-            write_dockerfile_cmd = f"echo '{escaped}' > Dockerfile"
-
-        deploy_commands = f"""
-cd /opt/deployshield || mkdir -p /opt/deployshield && cd /opt/deployshield
-
-if [ -d "{project_name}" ]; then
-    cd {project_name}
-    git pull origin {branch}
-else
-    git clone --branch {branch} {repo_url} {project_name}
-    cd {project_name}
-fi
-
-{write_dockerfile_cmd}
-
-if [ -f "docker-compose.yml" ] || [ -f "docker-compose.yaml" ]; then
-    docker compose down
-    docker compose up -d --build
-elif [ -f "Dockerfile" ]; then
-    docker build -t {project_name} .
-    docker stop {project_name} 2>/dev/null || true
-    docker rm {project_name} 2>/dev/null || true
-    docker run -d --name {project_name} --restart unless-stopped {project_name}
-else
-    echo "ERROR: No Dockerfile or docker-compose.yml found"
-    exit 1
-fi
-"""
-
-        result = subprocess.run(
-            [
-                "ssh",
-                "-i", key_path,
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "ConnectTimeout=10",
-                "-p", str(ssh_port),
-                f"{ssh_user}@{ip_address}",
-                deploy_commands,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-
-        if result.returncode != 0:
-            stages.append({
-                "name": "deploy",
-                "status": "failed",
-                "error": result.stderr.strip(),
-                "log": result.stdout,
-            })
+    # --- Cloud Run ---
+    if target_type == "cloud_run":
+        if not server.gcp_project_id or not server.gcp_service_account_json:
             return {
                 "success": False,
-                "stages": stages,
-                "error": result.stderr.strip(),
+                "error": "Cloud Run requires gcp_project_id and gcp_service_account_json",
+                "stages": [],
+                "completed_at": datetime.utcnow().isoformat(),
             }
 
-        stages.append({
-            "name": "deploy",
-            "status": "success",
-            "log": result.stdout,
-        })
+        result = deploy_cloud_run(
+            gcp_project_id=server.gcp_project_id,
+            gcp_region=server.gcp_region or "us-central1",
+            gcp_service_account_json=server.gcp_service_account_json,
+            cloud_run_service_name=server.cloud_run_service_name or project_name,
+            artifact_registry_repo=server.artifact_registry_repo,
+            repo_url=repo_url,
+            branch=branch,
+            project_name=project_name,
+            app_port=server.app_port or 3000,
+            env_variables=env_variables,
+        )
 
-        return {
-            "success": True,
-            "stages": stages,
-            "log": result.stdout,
-        }
+        # Setup secrets if there are env vars marked as secrets
+        if result["success"] and env_variables:
+            secrets = {k: v for k, v in env_variables.items() if k.startswith("SECRET_")}
+            if secrets:
+                secret_result = setup_cloud_run_secrets(
+                    gcp_project_id=server.gcp_project_id,
+                    gcp_service_account_json=server.gcp_service_account_json,
+                    cloud_run_service_name=server.cloud_run_service_name or project_name,
+                    gcp_region=server.gcp_region or "us-central1",
+                    secrets=secrets,
+                )
+                if secret_result.get("created_secrets"):
+                    result["stages"].append({
+                        "name": "secrets",
+                        "status": "success",
+                        "log": f"Created secrets: {', '.join(secret_result['created_secrets'])}",
+                    })
 
-    except subprocess.TimeoutExpired:
+    # --- SSH-based targets (ec2, kvm, vps) ---
+    elif target_type in ("ec2", "kvm", "vps"):
+        if not server.ip_address or not server.ssh_private_key:
+            return {
+                "success": False,
+                "error": f"{target_type} target requires ip_address and ssh_private_key",
+                "stages": [],
+                "completed_at": datetime.utcnow().isoformat(),
+            }
+
+        if deploy_method == "container":
+            result = deploy_container(
+                ip_address=server.ip_address,
+                ssh_user=server.ssh_user or "root",
+                ssh_port=server.ssh_port or 22,
+                ssh_private_key=server.ssh_private_key,
+                ssh_password=getattr(server, "ssh_password", None),
+                repo_url=repo_url,
+                branch=branch,
+                project_name=project_name,
+                app_port=server.app_port or 3000,
+                env_variables=env_variables,
+                generated_dockerfile=generated_dockerfile,
+            )
+        elif deploy_method == "webserver":
+            result = deploy_webserver(
+                ip_address=server.ip_address,
+                ssh_user=server.ssh_user or "root",
+                ssh_port=server.ssh_port or 22,
+                ssh_private_key=server.ssh_private_key,
+                ssh_password=getattr(server, "ssh_password", None),
+                repo_url=repo_url,
+                branch=branch,
+                project_name=project_name,
+                app_port=server.app_port or 3000,
+                env_variables=env_variables,
+            )
+        else:
+            return {
+                "success": False,
+                "error": f"Unknown deploy_method: {deploy_method}. Use 'container' or 'webserver'.",
+                "stages": [],
+                "completed_at": datetime.utcnow().isoformat(),
+            }
+
+        # Setup Nginx + SSL if requested and deploy succeeded
+        if result["success"] and server.domain and server.setup_nginx:
+            nginx_result = setup_nginx_and_ssl(
+                ip_address=server.ip_address,
+                ssh_user=server.ssh_user or "root",
+                ssh_port=server.ssh_port or 22,
+                ssh_private_key=server.ssh_private_key,
+                domain=server.domain,
+                app_port=server.app_port or 3000,
+                setup_ssl=server.setup_ssl or False,
+            )
+
+            result["stages"].extend(nginx_result.get("stages", []))
+
+            if nginx_result["success"]:
+                result["url"] = nginx_result["url"]
+                result["ssl_status"] = nginx_result.get("ssl_status")
+
+    else:
         return {
             "success": False,
-            "stages": [{"name": "deploy", "status": "failed", "error": "SSH connection timed out"}],
-            "error": "Deployment timed out after 300 seconds",
+            "error": f"Unknown target_type: {target_type}. Use 'cloud_run', 'ec2', 'kvm', or 'vps'.",
+            "stages": [],
+            "completed_at": datetime.utcnow().isoformat(),
         }
-    except Exception as e:
-        return {
-            "success": False,
-            "stages": [{"name": "deploy", "status": "failed", "error": str(e)}],
-            "error": str(e),
-        }
-    finally:
-        Path(key_path).unlink(missing_ok=True)
+
+    result["completed_at"] = datetime.utcnow().isoformat()
+    return result

@@ -9,7 +9,7 @@ from app.models.server import Server
 from app.models.deployment import Deployment
 from app.schemas.deployment import ValidateRequest, DeployRequest, DeploymentResponse
 from app.services.validate_service import run_validation
-from app.services.deploy_service import deploy_to_server
+from app.services.deploy_service import run_deploy
 
 router = APIRouter(prefix="/deployments", tags=["Deployments"])
 
@@ -34,30 +34,22 @@ def _run_validate_thread(deployment_id: str, repo_url: str, branch: str):
         db.close()
 
 
-def _run_deploy_thread(
-    deployment_id: str,
-    ip_address: str,
-    ssh_user: str,
-    ssh_port: int,
-    ssh_private_key: str,
-    repo_url: str,
-    branch: str,
-    project_name: str,
-):
+def _run_deploy_thread(deployment_id: str, server_id: str, repo_url: str, branch: str, project_name: str):
+    db = SessionLocal()
     try:
-        result = deploy_to_server(
-            ip_address=ip_address,
-            ssh_user=ssh_user,
-            ssh_port=ssh_port,
-            ssh_private_key=ssh_private_key,
-            repo_url=repo_url,
-            branch=branch,
-            project_name=project_name,
-        )
+        server = db.query(Server).filter(Server.id == server_id).first()
+        if not server:
+            result = {"success": False, "error": "Server not found", "stages": []}
+        else:
+            result = run_deploy(
+                server=server,
+                repo_url=repo_url,
+                branch=branch,
+                project_name=project_name,
+            )
     except Exception as e:
         result = {"success": False, "error": str(e), "stages": []}
 
-    db = SessionLocal()
     try:
         deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
         if deployment:
@@ -117,16 +109,7 @@ def deploy_project(data: DeployRequest, db: Session = Depends(get_db)):
 
     thread = threading.Thread(
         target=_run_deploy_thread,
-        args=(
-            deployment.id,
-            server.ip_address,
-            server.ssh_user,
-            server.ssh_port,
-            server.ssh_private_key,
-            project.repo_url,
-            project.branch,
-            project.name,
-        ),
+        args=(deployment.id, server.id, project.repo_url, project.branch, project.name),
     )
     thread.start()
 
