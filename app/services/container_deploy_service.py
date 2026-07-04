@@ -88,6 +88,75 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
+# Auto-generate Dockerfile if missing
+if [ ! -f "Dockerfile" ] && [ ! -f "docker-compose.yml" ] && [ ! -f "docker-compose.yaml" ]; then
+    if [ -f "package.json" ]; then
+        if grep -q "next" package.json 2>/dev/null; then
+            cat > Dockerfile << 'DEOF'
+FROM node:22-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+EXPOSE 3000
+CMD ["npm", "start"]
+DEOF
+        elif grep -q "nest" package.json 2>/dev/null; then
+            cat > Dockerfile << 'DEOF'
+FROM node:22-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+EXPOSE 3000
+CMD ["node", "dist/main"]
+DEOF
+        else
+            cat > Dockerfile << 'DEOF'
+FROM node:22-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --production
+COPY . .
+EXPOSE 3000
+CMD ["npm", "start"]
+DEOF
+        fi
+        echo "DOCKERFILE_GENERATED=nodejs"
+    elif [ -f "requirements.txt" ]; then
+        cat > Dockerfile << 'DEOF'
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 8000
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+DEOF
+        echo "DOCKERFILE_GENERATED=python"
+    elif [ -f "go.mod" ]; then
+        cat > Dockerfile << 'DEOF'
+FROM golang:1.22-alpine AS builder
+WORKDIR /app
+COPY go.* ./
+RUN go mod download
+COPY . .
+RUN go build -o main .
+FROM alpine:3.19
+WORKDIR /app
+COPY --from=builder /app/main .
+EXPOSE 8080
+CMD ["./main"]
+DEOF
+        echo "DOCKERFILE_GENERATED=go"
+    else
+        echo "ERROR: No Dockerfile found and cannot detect project type"
+        exit 1
+    fi
+fi
+
 # Build and deploy
 if [ -f "docker-compose.yml" ] || [ -f "docker-compose.yaml" ]; then
     docker compose down 2>/dev/null || true
