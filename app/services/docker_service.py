@@ -92,9 +92,12 @@ def run_container_check(image_tag: str) -> dict:
         # Remove if exists from previous run
         subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, timeout=10)
 
-        # Run container in background
+        # Run container in background with common env vars for startup
         run_result = subprocess.run(
-            ["docker", "run", "-d", "--name", container_name, image_tag],
+            ["docker", "run", "-d", "--name", container_name,
+             "-e", "PORT=3000", "-e", "NODE_ENV=production",
+             "-e", "HOST=0.0.0.0",
+             image_tag],
             capture_output=True,
             text=True,
             timeout=30,
@@ -107,9 +110,9 @@ def run_container_check(image_tag: str) -> dict:
                 "error": f"Container failed to start: {run_result.stderr.strip()}",
             }
 
-        # Wait 5 seconds for app to start
+        # Wait 10 seconds for app to start
         import time
-        time.sleep(5)
+        time.sleep(10)
 
         # Check if container is still running
         inspect_result = subprocess.run(

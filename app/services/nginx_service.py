@@ -26,17 +26,20 @@ def setup_nginx_and_ssl(
     ip_address: str,
     ssh_user: str,
     ssh_port: int,
-    ssh_private_key: str,
-    domain: str,
-    app_port: int,
+    ssh_private_key: str | None = None,
+    ssh_password: str | None = None,
+    domain: str = "",
+    app_port: int = 3000,
     setup_ssl: bool = True,
 ) -> dict:
     stages = []
 
-    key_file = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
-    key_file.write(ssh_private_key)
-    key_file.close()
-    key_path = key_file.name
+    key_path = None
+    if ssh_private_key:
+        key_file = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+        key_file.write(ssh_private_key)
+        key_file.close()
+        key_path = key_file.name
 
     nginx_config = NGINX_TEMPLATE.format(domain=domain, app_port=app_port)
     escaped_config = nginx_config.replace("'", "'\\''")
@@ -91,16 +94,30 @@ echo "NGINX_STATUS=configured"
 {ssl_cmd}
 """
 
-    try:
-        result = subprocess.run(
-            [
+    def build_ssh_cmd(command: str) -> list:
+        if key_path:
+            return [
                 "ssh", "-i", key_path,
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "ConnectTimeout=10",
                 "-p", str(ssh_port),
                 f"{ssh_user}@{ip_address}",
-                commands,
-            ],
+                command,
+            ]
+        else:
+            return [
+                "sshpass", "-p", ssh_password,
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=10",
+                "-p", str(ssh_port),
+                f"{ssh_user}@{ip_address}",
+                command,
+            ]
+
+    try:
+        result = subprocess.run(
+            build_ssh_cmd(commands),
             capture_output=True, text=True, timeout=120,
         )
 
@@ -142,4 +159,5 @@ echo "NGINX_STATUS=configured"
     except Exception as e:
         return {"success": False, "stages": stages, "error": str(e)}
     finally:
-        Path(key_path).unlink(missing_ok=True)
+        if key_path:
+            Path(key_path).unlink(missing_ok=True)

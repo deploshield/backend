@@ -12,6 +12,11 @@ class DeployRequest(BaseModel):
     server_id: str
 
 
+class SetupDomainRequest(BaseModel):
+    domain: str
+    setup_ssl: bool = True
+
+
 class DeploymentResponse(BaseModel):
     id: str
     project_id: str
