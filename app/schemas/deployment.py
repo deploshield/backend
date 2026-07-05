@@ -5,6 +5,7 @@ from typing import Optional, Any
 
 class ValidateRequest(BaseModel):
     project_id: str
+    env_vars: Optional[str] = None
 
 
 class DeployRequest(BaseModel):

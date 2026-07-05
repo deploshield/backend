@@ -16,9 +16,9 @@ from app.services.nginx_service import setup_nginx_and_ssl
 router = APIRouter(prefix="/deployments", tags=["Deployments"])
 
 
-def _run_validate_thread(deployment_id: str, repo_url: str, branch: str):
+def _run_validate_thread(deployment_id: str, repo_url: str, branch: str, env_vars: str = None):
     try:
-        result = run_validation(repo_url, branch, deployment_id)
+        result = run_validation(repo_url, branch, deployment_id, env_vars=env_vars)
     except Exception as e:
         result = {"success": False, "error": str(e), "stages": []}
 
@@ -82,7 +82,7 @@ def validate_build(data: ValidateRequest, db: Session = Depends(get_db)):
 
     thread = threading.Thread(
         target=_run_validate_thread,
-        args=(deployment.id, project.repo_url, project.branch),
+        args=(deployment.id, project.repo_url, project.branch, data.env_vars),
     )
     thread.start()
 

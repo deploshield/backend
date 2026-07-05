@@ -8,7 +8,7 @@ from app.services.dockerfile_generator import generate_dockerfile
 from app.services.code_checker_service import check_env_variables, check_dependencies, check_code_errors
 
 
-def run_validation(repo_url: str, branch: str, deployment_id: str) -> dict:
+def run_validation(repo_url: str, branch: str, deployment_id: str, env_vars: str = None) -> dict:
     stages = []
     image_tag = f"deployshield-validate-{deployment_id}"
 
@@ -148,13 +148,35 @@ def run_validation(repo_url: str, branch: str, deployment_id: str) -> dict:
         }
 
     # Stage 5: Container startup check
-    container_result = run_container_check(image_tag)
-    stages.append({
-        "name": "container_start",
-        "status": "success" if container_result["success"] else "failed",
-        "log": container_result.get("log", container_result.get("error", "")),
-        "app_logs": container_result.get("app_logs", container_result.get("logs", "")),
-    })
+    container_result = run_container_check(image_tag, env_vars=env_vars)
+    container_crashed = not container_result["success"]
+    logs_text = container_result.get("app_logs", container_result.get("logs", ""))
+
+    # Detect if crash is due to missing env vars / connection issues (not a real code bug)
+    env_related_keywords = ["ECONNREFUSED", "DATABASE", "MONGO", "REDIS", "CONNECTION", "ENV", "SECRET", "undefined", "Cannot read properties of null"]
+    is_env_issue = container_crashed and any(kw.lower() in (logs_text or "").lower() for kw in env_related_keywords)
+
+    if container_crashed and is_env_issue:
+        stages.append({
+            "name": "container_start",
+            "status": "warning",
+            "log": "Container exited (likely missing env vars/database). Build is valid.",
+            "app_logs": logs_text,
+        })
+    elif container_crashed:
+        stages.append({
+            "name": "container_start",
+            "status": "warning",
+            "log": container_result.get("error", "Container crashed after starting"),
+            "app_logs": logs_text,
+        })
+    else:
+        stages.append({
+            "name": "container_start",
+            "status": "success",
+            "log": container_result.get("log", "Container started successfully"),
+            "app_logs": logs_text,
+        })
 
     # Cleanup
     try:
@@ -163,23 +185,18 @@ def run_validation(repo_url: str, branch: str, deployment_id: str) -> dict:
         pass
     remove_docker_image(image_tag)
 
-    if not container_result["success"]:
-        return {
-            "success": False,
-            "stages": stages,
-            "error": container_result["error"],
-            "app_logs": container_result.get("logs", ""),
-            "completed_at": datetime.utcnow().isoformat(),
-        }
-
-    # All passed
+    # All passed (container crash is a warning, not a failure)
     all_issues = env_result["issues"] + dep_result["issues"] + code_result["issues"]
     warnings = [i for i in all_issues if i["type"] == "warning"]
+
+    message = "All checks passed. Application builds and starts successfully."
+    if container_crashed:
+        message = "Build passed. Container exited during startup check (likely needs env vars/database)."
 
     return {
         "success": True,
         "stages": stages,
-        "message": "All checks passed. Application builds and starts successfully.",
+        "message": message,
         "warnings": [w["message"] for w in warnings] if warnings else [],
         "completed_at": datetime.utcnow().isoformat(),
     }

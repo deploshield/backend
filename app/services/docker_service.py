@@ -85,19 +85,29 @@ def build_docker_image(repo_path: str, image_tag: str) -> dict:
         }
 
 
-def run_container_check(image_tag: str) -> dict:
+def run_container_check(image_tag: str, env_vars: str = None) -> dict:
     container_name = f"{image_tag}-check"
 
     try:
         # Remove if exists from previous run
         subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, timeout=10)
 
-        # Run container in background with common env vars for startup
+        # Build docker run command with env vars
+        cmd = ["docker", "run", "-d", "--name", container_name,
+               "-e", "PORT=3000", "-e", "NODE_ENV=production", "-e", "HOST=0.0.0.0"]
+
+        # Parse user-provided env vars (KEY=VALUE per line)
+        if env_vars:
+            for line in env_vars.strip().split("\n"):
+                line = line.strip()
+                if line and "=" in line and not line.startswith("#"):
+                    cmd.extend(["-e", line])
+
+        cmd.append(image_tag)
+
+        # Run container in background
         run_result = subprocess.run(
-            ["docker", "run", "-d", "--name", container_name,
-             "-e", "PORT=3000", "-e", "NODE_ENV=production",
-             "-e", "HOST=0.0.0.0",
-             image_tag],
+            cmd,
             capture_output=True,
             text=True,
             timeout=30,
