@@ -92,8 +92,8 @@ def run_container_check(image_tag: str, env_vars: str = None) -> dict:
         # Remove if exists from previous run
         subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, timeout=10)
 
-        # Build docker run command with env vars
-        cmd = ["docker", "run", "-d", "--name", container_name,
+        # Build docker run command with env vars and host network for external access
+        cmd = ["docker", "run", "-d", "--name", container_name, "--network", "host",
                "-e", "PORT=3000", "-e", "NODE_ENV=production", "-e", "HOST=0.0.0.0"]
 
         # Parse user-provided env vars (KEY=VALUE per line)
