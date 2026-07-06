@@ -51,8 +51,8 @@ def check_env_variables(repo_path: str) -> dict:
     if not has_env and not has_example:
         if required_vars:
             issues.append({
-                "type": "warning",
-                "message": f"No .env or .env.example found, but code uses {len(required_vars)} environment variables",
+                "type": "info",
+                "message": f"No .env.example in repo. Code uses {len(required_vars)} env variables — make sure to provide them in the target config for deployment.",
                 "variables": sorted(required_vars),
             })
 
@@ -157,29 +157,74 @@ def check_dependencies(repo_path: str) -> dict:
     }
 
 
+def _check_js_syntax(file_path: Path, filename: str) -> list:
+    """Run basic JS syntax validation by checking for unclosed strings and common errors."""
+    issues = []
+    try:
+        content = file_path.read_text(errors="ignore")
+        lines = content.splitlines()
+
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("//") or stripped.startswith("*"):
+                continue
+
+            # Check for truncated/unclosed strings on a single line
+            in_string = None
+            escaped = False
+            for ch in stripped:
+                if escaped:
+                    escaped = False
+                    continue
+                if ch == '\\':
+                    escaped = True
+                    continue
+                if ch in ('"', "'", '`'):
+                    if in_string is None:
+                        in_string = ch
+                    elif in_string == ch:
+                        in_string = None
+
+            # If line ends with an unclosed string and doesn't end with a continuation
+            if in_string and in_string != '`' and not stripped.endswith((',', '+', '\\')):
+                issues.append({
+                    "type": "error",
+                    "message": f"{filename}:{i}: Unclosed string literal (possible truncated code)",
+                })
+                break  # One is enough to flag the file
+
+        # Bracket balance check
+        open_parens = content.count("(") - content.count(")")
+        open_braces = content.count("{") - content.count("}")
+        open_brackets = content.count("[") - content.count("]")
+
+        if abs(open_parens) > 2:
+            issues.append({"type": "warning", "message": f"{filename}: Mismatched parentheses (could be syntax error)"})
+        if abs(open_braces) > 2:
+            issues.append({"type": "warning", "message": f"{filename}: Mismatched braces (could be syntax error)"})
+        if abs(open_brackets) > 2:
+            issues.append({"type": "warning", "message": f"{filename}: Mismatched brackets (could be syntax error)"})
+
+    except Exception:
+        pass
+    return issues
+
+
 def check_code_errors(repo_path: str) -> dict:
     path = Path(repo_path)
     issues = []
 
     # Check for syntax errors in main entry files
-    entry_files = ["index.js", "app.js", "server.js", "main.js", "main.py", "app.py"]
+    entry_files = ["index.js", "app.js", "server.js", "main.js", "src/index.js", "src/app.js", "src/server.js", "main.py", "app.py"]
 
     for entry in entry_files:
         entry_path = path / entry
         if entry_path.exists():
+            if entry.endswith(".js"):
+                issues.extend(_check_js_syntax(entry_path, entry))
+
             try:
                 content = entry_path.read_text(errors="ignore")
-
-                # Check for common issues
-                # Unclosed strings/brackets (basic check)
-                open_parens = content.count("(") - content.count(")")
-                open_braces = content.count("{") - content.count("}")
-                open_brackets = content.count("[") - content.count("]")
-
-                if abs(open_parens) > 2:
-                    issues.append({"type": "warning", "message": f"{entry}: Mismatched parentheses (could be syntax error)"})
-                if abs(open_braces) > 2:
-                    issues.append({"type": "warning", "message": f"{entry}: Mismatched braces (could be syntax error)"})
 
                 # Check for require/import of non-existent local files
                 local_requires = re.findall(r'require\(["\'](\./[^"\']+)["\']\)', content)

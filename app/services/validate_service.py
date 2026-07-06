@@ -6,9 +6,10 @@ from app.services.docker_service import check_dockerfile_exists, build_docker_im
 from app.services.detector_service import detect_project_type
 from app.services.dockerfile_generator import generate_dockerfile
 from app.services.code_checker_service import check_env_variables, check_dependencies, check_code_errors
+from app.services.ai_analysis_service import analyze_validation_result
 
 
-def run_validation(repo_url: str, branch: str, deployment_id: str, env_vars: str = None) -> dict:
+def _run_stages(repo_url: str, branch: str, deployment_id: str, env_vars: str = None) -> dict:
     stages = []
     image_tag = f"deployshield-validate-{deployment_id}"
 
@@ -152,11 +153,22 @@ def run_validation(repo_url: str, branch: str, deployment_id: str, env_vars: str
     container_crashed = not container_result["success"]
     logs_text = container_result.get("app_logs", container_result.get("logs", ""))
 
+    # Detect if crash is a real code bug (SyntaxError, TypeError, ReferenceError etc.)
+    code_error_keywords = ["SyntaxError", "ReferenceError", "TypeError: Cannot", "MODULE_NOT_FOUND", "Cannot find module"]
+    is_code_error = container_crashed and any(kw in (logs_text or "") for kw in code_error_keywords)
+
     # Detect if crash is due to missing env vars / connection issues (not a real code bug)
     env_related_keywords = ["ECONNREFUSED", "DATABASE", "MONGO", "REDIS", "CONNECTION", "ENV", "SECRET", "undefined", "Cannot read properties of null"]
-    is_env_issue = container_crashed and any(kw.lower() in (logs_text or "").lower() for kw in env_related_keywords)
+    is_env_issue = container_crashed and not is_code_error and any(kw.lower() in (logs_text or "").lower() for kw in env_related_keywords)
 
-    if container_crashed and is_env_issue:
+    if container_crashed and is_code_error:
+        stages.append({
+            "name": "container_start",
+            "status": "failed",
+            "log": "Container crashed due to code error. Fix the code before deploying.",
+            "app_logs": logs_text,
+        })
+    elif container_crashed and is_env_issue:
         stages.append({
             "name": "container_start",
             "status": "warning",
@@ -185,7 +197,16 @@ def run_validation(repo_url: str, branch: str, deployment_id: str, env_vars: str
         pass
     remove_docker_image(image_tag)
 
-    # All passed (container crash is a warning, not a failure)
+    # If container crashed due to code error, validation fails
+    if is_code_error:
+        return {
+            "success": False,
+            "stages": stages,
+            "error": "Container crashed due to code error (SyntaxError/TypeError/missing module). Fix the code before deploying.",
+            "completed_at": datetime.utcnow().isoformat(),
+        }
+
+    # All passed (env-related container crash is a warning, not a failure)
     all_issues = env_result["issues"] + dep_result["issues"] + code_result["issues"]
     warnings = [i for i in all_issues if i["type"] == "warning"]
 
@@ -200,3 +221,22 @@ def run_validation(repo_url: str, branch: str, deployment_id: str, env_vars: str
         "warnings": [w["message"] for w in warnings] if warnings else [],
         "completed_at": datetime.utcnow().isoformat(),
     }
+
+
+def run_validation(repo_url: str, branch: str, deployment_id: str, env_vars: str = None) -> dict:
+    result = _run_stages(repo_url, branch, deployment_id, env_vars=env_vars)
+
+    # Run AI analysis on the result
+    try:
+        ai_analysis = analyze_validation_result(result)
+        result["ai_analysis"] = ai_analysis
+    except Exception as e:
+        result["ai_analysis"] = {
+            "summary": "AI analysis unavailable",
+            "status": "unknown",
+            "details": str(e),
+            "fix_suggestion": "",
+            "issues": [],
+        }
+
+    return result
