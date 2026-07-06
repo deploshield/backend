@@ -11,6 +11,7 @@ class ValidateRequest(BaseModel):
 class DeployRequest(BaseModel):
     project_id: str
     server_id: str
+    env_vars: Optional[str] = None
 
 
 class SetupDomainRequest(BaseModel):

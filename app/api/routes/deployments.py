@@ -36,18 +36,27 @@ def _run_validate_thread(deployment_id: str, repo_url: str, branch: str, env_var
         db.close()
 
 
-def _run_deploy_thread(deployment_id: str, server_id: str, repo_url: str, branch: str, project_name: str):
+def _run_deploy_thread(deployment_id: str, server_id: str, repo_url: str, branch: str, project_name: str, env_vars: str = None):
     db = SessionLocal()
     try:
         server = db.query(Server).filter(Server.id == server_id).first()
         if not server:
             result = {"success": False, "error": "Server not found", "stages": []}
         else:
+            # Merge user-provided env_vars with server env_variables
+            merged_env = dict(server.env_variables or {}) if server.env_variables else {}
+            if env_vars:
+                for line in env_vars.strip().split("\n"):
+                    line = line.strip()
+                    if line and "=" in line and not line.startswith("#"):
+                        key, _, value = line.partition("=")
+                        merged_env[key.strip()] = value.strip()
             result = run_deploy(
                 server=server,
                 repo_url=repo_url,
                 branch=branch,
                 project_name=project_name,
+                env_variables_override=merged_env if merged_env else None,
             )
     except Exception as e:
         result = {"success": False, "error": str(e), "stages": []}
@@ -111,7 +120,7 @@ def deploy_project(data: DeployRequest, db: Session = Depends(get_db)):
 
     thread = threading.Thread(
         target=_run_deploy_thread,
-        args=(deployment.id, server.id, project.repo_url, project.branch, project.name),
+        args=(deployment.id, server.id, project.repo_url, project.branch, project.name, data.env_vars),
     )
     thread.start()
 
@@ -201,5 +210,6 @@ def get_deployment(deployment_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/", response_model=list[DeploymentResponse])
-def list_deployments(db: Session = Depends(get_db)):
-    return db.query(Deployment).order_by(Deployment.started_at.desc()).all()
+def list_deployments(page: int = 1, per_page: int = 10, db: Session = Depends(get_db)):
+    offset = (page - 1) * per_page
+    return db.query(Deployment).order_by(Deployment.started_at.desc()).offset(offset).limit(per_page).all()

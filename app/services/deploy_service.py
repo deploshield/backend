@@ -12,12 +12,13 @@ def run_deploy(
     branch: str,
     project_name: str,
     generated_dockerfile: str | None = None,
+    env_variables_override: dict | None = None,
 ) -> dict:
     """Route deployment to the correct strategy based on server.target_type and server.deploy_method."""
 
     target_type = getattr(server, "target_type", "kvm")
     deploy_method = getattr(server, "deploy_method", "container")
-    env_variables = getattr(server, "env_variables", None)
+    env_variables = env_variables_override if env_variables_override else getattr(server, "env_variables", None)
 
     stages = []
     result = None
