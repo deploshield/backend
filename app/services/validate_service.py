@@ -228,7 +228,7 @@ def run_validation(repo_url: str, branch: str, deployment_id: str, env_vars: str
 
     # Run AI analysis on the result
     try:
-        ai_analysis = analyze_validation_result(result)
+        ai_analysis = analyze_validation_result(result, env_vars=env_vars)
         result["ai_analysis"] = ai_analysis
     except Exception as e:
         result["ai_analysis"] = {

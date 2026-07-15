@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.auth import get_current_user
 from app.models.server import Server
 from app.schemas.server import ServerCreate, ServerResponse
 
@@ -9,8 +10,13 @@ router = APIRouter(prefix="/servers", tags=["Servers"])
 
 
 @router.post("/", response_model=ServerResponse)
-def create_server(data: ServerCreate, db: Session = Depends(get_db)):
+async def create_server(
+    data: ServerCreate,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
     server = Server(
+        user_id=user_id,
         name=data.name,
         target_type=data.target_type,
         deploy_method=data.deploy_method,
@@ -37,8 +43,13 @@ def create_server(data: ServerCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{server_id}", response_model=ServerResponse)
-def update_server(server_id: str, data: ServerCreate, db: Session = Depends(get_db)):
-    server = db.query(Server).filter(Server.id == server_id).first()
+async def update_server(
+    server_id: str,
+    data: ServerCreate,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    server = db.query(Server).filter(Server.id == server_id, Server.user_id == user_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
 
@@ -51,21 +62,32 @@ def update_server(server_id: str, data: ServerCreate, db: Session = Depends(get_
 
 
 @router.get("/", response_model=list[ServerResponse])
-def list_servers(db: Session = Depends(get_db)):
-    return db.query(Server).order_by(Server.created_at.desc()).all()
+async def list_servers(
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    return db.query(Server).filter(Server.user_id == user_id).order_by(Server.created_at.desc()).all()
 
 
 @router.get("/{server_id}", response_model=ServerResponse)
-def get_server(server_id: str, db: Session = Depends(get_db)):
-    server = db.query(Server).filter(Server.id == server_id).first()
+async def get_server(
+    server_id: str,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    server = db.query(Server).filter(Server.id == server_id, Server.user_id == user_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
     return server
 
 
 @router.delete("/{server_id}")
-def delete_server(server_id: str, db: Session = Depends(get_db)):
-    server = db.query(Server).filter(Server.id == server_id).first()
+async def delete_server(
+    server_id: str,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    server = db.query(Server).filter(Server.id == server_id, Server.user_id == user_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
     db.delete(server)

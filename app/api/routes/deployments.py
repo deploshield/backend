@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from app.core.database import get_db, SessionLocal
+from app.core.auth import get_current_user
 from app.models.project import Project
 from app.models.server import Server
 from app.models.deployment import Deployment
@@ -43,7 +44,6 @@ def _run_deploy_thread(deployment_id: str, server_id: str, repo_url: str, branch
         if not server:
             result = {"success": False, "error": "Server not found", "stages": []}
         else:
-            # Merge user-provided env_vars with server env_variables
             merged_env = dict(server.env_variables or {}) if server.env_variables else {}
             if env_vars:
                 for line in env_vars.strip().split("\n"):
@@ -75,12 +75,17 @@ def _run_deploy_thread(deployment_id: str, server_id: str, repo_url: str, branch
 
 
 @router.post("/validate", response_model=DeploymentResponse)
-def validate_build(data: ValidateRequest, db: Session = Depends(get_db)):
-    project = db.query(Project).filter(Project.id == data.project_id).first()
+async def validate_build(
+    data: ValidateRequest,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    project = db.query(Project).filter(Project.id == data.project_id, Project.user_id == user_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
     deployment = Deployment(
+        user_id=user_id,
         project_id=project.id,
         status="running",
         trigger_type="validate",
@@ -99,16 +104,21 @@ def validate_build(data: ValidateRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/deploy", response_model=DeploymentResponse)
-def deploy_project(data: DeployRequest, db: Session = Depends(get_db)):
-    project = db.query(Project).filter(Project.id == data.project_id).first()
+async def deploy_project(
+    data: DeployRequest,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    project = db.query(Project).filter(Project.id == data.project_id, Project.user_id == user_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    server = db.query(Server).filter(Server.id == data.server_id).first()
+    server = db.query(Server).filter(Server.id == data.server_id, Server.user_id == user_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
 
     deployment = Deployment(
+        user_id=user_id,
         project_id=project.id,
         server_id=server.id,
         status="running",
@@ -128,15 +138,17 @@ def deploy_project(data: DeployRequest, db: Session = Depends(get_db)):
 
 
 @router.delete("/{deployment_id}")
-def delete_deployment(deployment_id: str, db: Session = Depends(get_db)):
-    """Stop container, remove files from server, delete DB record."""
-    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+async def delete_deployment(
+    deployment_id: str,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    deployment = db.query(Deployment).filter(Deployment.id == deployment_id, Deployment.user_id == user_id).first()
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
     cleanup_result = {"skipped": True}
 
-    # If it was a deploy (not just validate), clean up the server
     if deployment.trigger_type == "deploy" and deployment.server_id:
         server = db.query(Server).filter(Server.id == deployment.server_id).first()
         project = db.query(Project).filter(Project.id == deployment.project_id).first()
@@ -162,9 +174,13 @@ def delete_deployment(deployment_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{deployment_id}/setup-domain")
-def setup_domain(deployment_id: str, data: SetupDomainRequest, db: Session = Depends(get_db)):
-    """Setup Nginx + SSL for a successful deployment."""
-    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+async def setup_domain(
+    deployment_id: str,
+    data: SetupDomainRequest,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    deployment = db.query(Deployment).filter(Deployment.id == deployment_id, Deployment.user_id == user_id).first()
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
@@ -189,7 +205,6 @@ def setup_domain(deployment_id: str, data: SetupDomainRequest, db: Session = Dep
         setup_ssl=data.setup_ssl,
     )
 
-    # Update deployment result with domain info
     if result["success"]:
         dep_result = deployment.result or {}
         dep_result["domain"] = data.domain
@@ -202,14 +217,30 @@ def setup_domain(deployment_id: str, data: SetupDomainRequest, db: Session = Dep
 
 
 @router.get("/{deployment_id}", response_model=DeploymentResponse)
-def get_deployment(deployment_id: str, db: Session = Depends(get_db)):
-    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+async def get_deployment(
+    deployment_id: str,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    deployment = db.query(Deployment).filter(Deployment.id == deployment_id, Deployment.user_id == user_id).first()
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
     return deployment
 
 
 @router.get("/", response_model=list[DeploymentResponse])
-def list_deployments(page: int = 1, per_page: int = 10, db: Session = Depends(get_db)):
+async def list_deployments(
+    page: int = 1,
+    per_page: int = 10,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
     offset = (page - 1) * per_page
-    return db.query(Deployment).order_by(Deployment.started_at.desc()).offset(offset).limit(per_page).all()
+    return (
+        db.query(Deployment)
+        .filter(Deployment.user_id == user_id)
+        .order_by(Deployment.started_at.desc())
+        .offset(offset)
+        .limit(per_page)
+        .all()
+    )

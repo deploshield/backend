@@ -37,7 +37,7 @@ Rules:
 """
 
 
-def analyze_validation_result(validation_result: dict) -> dict:
+def analyze_validation_result(validation_result: dict, env_vars: str = None) -> dict:
     """Run AI analysis on validation results using agno agent."""
     try:
         agent = Agent(
@@ -46,9 +46,16 @@ def analyze_validation_result(validation_result: dict) -> dict:
             markdown=False,
         )
 
+        env_context = ""
+        if env_vars:
+            provided_keys = [line.split("=")[0].strip() for line in env_vars.strip().split("\n") if "=" in line and not line.startswith("#")]
+            env_context = f"\n\nIMPORTANT: The user HAS already provided these environment variables: {', '.join(provided_keys)}. Do NOT suggest adding env vars that are already provided. If the container still crashed, the issue is likely incorrect values, unreachable external services, or variables that are set but the service they connect to is not available during validation."
+        else:
+            env_context = "\n\nNote: The user did NOT provide any environment variables for this validation run."
+
         prompt = f"""Analyze this deployment validation result and provide a clear explanation:
 
-{json.dumps(validation_result, indent=2, default=str)}
+{json.dumps(validation_result, indent=2, default=str)}{env_context}
 
 Respond with JSON only."""
 

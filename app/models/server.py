@@ -8,6 +8,7 @@ class Server(Base):
     __tablename__ = "servers"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False, index=True)
     name = Column(String, nullable=False)
 
     # Target type: cloud_run, ec2, kvm, vps

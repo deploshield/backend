@@ -8,6 +8,7 @@ class Deployment(Base):
     __tablename__ = "deployments"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False, index=True)
     project_id = Column(String, nullable=False)
     server_id = Column(String, nullable=True)
     status = Column(String, default="queued")
