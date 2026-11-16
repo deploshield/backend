@@ -17,6 +17,7 @@ def deploy_cloud_run(
     env_variables: dict | None = None,
 ) -> dict:
     stages = []
+    project_name = project_name.lower().replace(" ", "-")
 
     # Write service account key to temp file
     sa_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)

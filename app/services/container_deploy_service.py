@@ -17,6 +17,8 @@ def deploy_container(
     generated_dockerfile: str | None = None,
 ) -> dict:
     stages = []
+    # Docker image/container names must be lowercase
+    project_name = project_name.lower().replace(" ", "-")
 
     key_path = None
     if ssh_private_key:
@@ -165,7 +167,9 @@ if [ -f "docker-compose.yml" ] || [ -f "docker-compose.yaml" ]; then
 elif [ -f "Dockerfile" ]; then
     docker build -t {project_name} .
     docker stop {project_name} 2>/dev/null || true
-    docker rm {project_name} 2>/dev/null || true
+    docker rm -f {project_name} 2>/dev/null || true
+    # Kill any other container holding the same port
+    docker ps -q --filter "publish={app_port}" | xargs -r docker rm -f 2>/dev/null || true
     docker run -d --name {project_name} --restart unless-stopped \\
         -p {app_port}:{app_port} \\
         {docker_env_flag} \\
