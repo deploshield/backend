@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", message='Field "model_', category=UserWarning)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
